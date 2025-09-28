@@ -29,7 +29,7 @@ static void signal_handler(void)
     	shutdown(g_listen_fd, SHUT_RDWR); // unblock accept()
 }
 
-static int install_signals(void) //anuja done like ppt
+static int install_signals(void) 
 {
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(new_action));
