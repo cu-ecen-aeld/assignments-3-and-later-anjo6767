@@ -3,6 +3,7 @@
 #   Cross build:   make CROSS_COMPILE=aarch64-none-linux-gnu-
 CC := $(CROSS_COMPILE)gcc
 CFLAGS ?= -Wall -Wextra 
+LDLIBS += -pthread
 RM ?= rm -f
 
 TARGET := aesdsocket

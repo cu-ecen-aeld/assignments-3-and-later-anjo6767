@@ -98,12 +98,6 @@ static int install_signals(void)
         return -1;
     if (sigaction(SIGTERM, &new_action, NULL) != 0)
         return -1;
-        
-    struct sigaction sp;
-    memset(&sp, 0, sizeof(sp));
-    sp.sa_handler = SIG_IGN;
-    if (sigaction(SIGPIPE, &sp, NULL) != 0)
-        return -1;
     return 0;
 }
 
@@ -247,7 +241,7 @@ int main(int argc, char *argv[])
     while ((opt = getopt(argc, argv, "d")) != -1) {
         if (opt == 'd') run_daemon = 1;
     }
-	unlink(DATAFILE);
+
     openlog("aesdsocket", 0, LOG_USER);
 
     if (install_signals() == -1) {
@@ -256,7 +250,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-   
+    unlink(DATAFILE);
 
     struct addrinfo hints, *res = NULL, *p = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -308,7 +302,7 @@ int main(int argc, char *argv[])
     syslog(LOG_INFO, "Listening on port %s", SERVICE_PORT_STR);
 
     /* Write startup marker once the listener is ready */
-    /*pthread_mutex_lock(&g_file_mtx);
+    pthread_mutex_lock(&g_file_mtx);
     int fd0 = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
     if (fd0 >= 0) {
         const char *marker = "timestamp:wait-for-startup\n";
@@ -321,7 +315,7 @@ int main(int argc, char *argv[])
         syslog(LOG_ERR, "startup marker open failed: %s", strerror(errno));
     }
     pthread_mutex_unlock(&g_file_mtx);
-*/
+
     pthread_create(&g_ts_tid, NULL, timestamp_thread, NULL);
 
     while (g_run) {
@@ -378,8 +372,6 @@ int main(int argc, char *argv[])
     }
 
     pthread_join(g_ts_tid, NULL);
-    syslog(LOG_INFO, "Main thread joined timestamp thread successfully");
-
     pthread_mutex_destroy(&g_file_mtx);
     unlink(DATAFILE);
     closelog();
