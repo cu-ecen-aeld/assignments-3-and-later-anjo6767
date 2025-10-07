@@ -1,11 +1,13 @@
 # Cross-compile support:
 #   Native build:  make
 #   Cross build:   make CROSS_COMPILE=aarch64-none-linux-gnu-
-CC := $(CROSS_COMPILE)gcc
+CC ?= $(CROSS_COMPILE)gcc
 CFLAGS ?= -Wall -Wextra 
+LDLIBS ?=
+LDLIBS += -pthread
 RM ?= rm -f
 
-TARGET := aesdsocket
+TARGET ?= aesdsocket
 SRCS := aesdsocket.c
 OBJS := $(SRCS:.c=.o)
 
