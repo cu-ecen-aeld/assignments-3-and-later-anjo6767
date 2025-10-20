@@ -18,7 +18,15 @@
 #include <time.h>
 #include <sys/time.h>
 
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
+
+#if USE_AESD_CHAR_DEVICE
+#define DATAFILE "/dev/aesdchar"
+#else
 #define DATAFILE "/var/tmp/aesdsocketdata"
+#endif
 #define RECV_CHUNK 1024
 #define SERVICE_PORT_STR "9000"
 
@@ -52,7 +60,7 @@ static char *read_file_locked(size_t *out_len)
         return NULL;
     }
 
-    struct stat st;
+    /*struct stat st;
     if (fstat(fd, &st) == -1) 
     {
         close(fd);
@@ -86,7 +94,35 @@ static char *read_file_locked(size_t *out_len)
     }
     close(fd);
     *out_len = (size_t)st.st_size;
-    return buf;
+    return buf;*/
+   
+    size_t cap = 0, len = 0;
+
+    for (;;) {
+        char tmp[4096];
+        ssize_t n = read(fd, tmp, sizeof tmp);
+        if (n > 0) {
+            if (len + (size_t)n > cap) {
+                size_t newcap = cap ? cap * 2 : 4096;
+                while (newcap < len + (size_t)n) newcap *= 2;
+                char *nb = realloc(buf, newcap);
+                if (!nb) { free(buf); close(fd); return NULL; }
+                buf = nb; cap = newcap;
+            }
+            memcpy(buf + len, tmp, (size_t)n);
+            len += (size_t)n;
+        } else if (n == 0) {
+            break;                  // EOF for the device on this read
+        } else if (errno == EINTR) {
+            continue;               // interrupted, retry
+        } else {
+            free(buf); close(fd); return NULL;   // real error
+        }
+    }
+
+    close(fd);
+    *out_len = len;
+    return buf;          
 }
 
 
@@ -107,7 +143,12 @@ static void *conn_thread(void *arg)
             pthread_mutex_lock(&g_file_mtx);
             if (packet_len > 0) 
 	    {
-                int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+                //int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+                #if USE_AESD_CHAR_DEVICE
+		int fdw = open(DATAFILE, O_WRONLY);
+		#else
+		int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+		#endif
                 if (fdw >= 0) 
 		{
                     (void)write(fdw, packet, packet_len);
@@ -161,7 +202,12 @@ static void *conn_thread(void *arg)
                 size_t chunk_len = (i + 1) - start;
 
                 pthread_mutex_lock(&g_file_mtx);
-                int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+                //int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+                #if USE_AESD_CHAR_DEVICE
+		int fdw = open(DATAFILE, O_WRONLY);
+		#else
+		int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
+		#endif
                 if (fdw >= 0) 
 		{
                     (void)write(fdw, packet + start, chunk_len);
@@ -213,7 +259,7 @@ static void *conn_thread(void *arg)
     return NULL;
 }
 
-
+#if !USE_AESD_CHAR_DEVICE
 static void *timestamp_thread(void *arg)
 {
     (void)arg;
@@ -250,6 +296,7 @@ static void *timestamp_thread(void *arg)
     }
     return NULL;
 }
+#endif
 
 static void signal_handler(int signo)
 {
@@ -342,8 +389,9 @@ int main(int argc, char *argv[])
             run_daemon = 1;
         }
     }
-
+#if !USE_AESD_CHAR_DEVICE
     unlink(DATAFILE);
+#endif
     openlog("aesdsocket", 0, LOG_USER);
 
 
@@ -411,7 +459,8 @@ int main(int argc, char *argv[])
     g_listen_fd = sockfd;
     syslog(LOG_INFO, "aesdsocket listening on port %s", SERVICE_PORT_STR);
 
-  
+
+#if !USE_AESD_CHAR_DEVICE
     if (pthread_create(&g_ts_tid, NULL, timestamp_thread, NULL) != 0) 
     {
         syslog(LOG_ERR, "timestamp thread creation failed");
@@ -419,6 +468,7 @@ int main(int argc, char *argv[])
         closelog();
         return -1;
     }
+#endif
 
     while (g_run) 
     {
@@ -470,9 +520,11 @@ int main(int argc, char *argv[])
         close(g_listen_fd);
     }
 
+#if !USE_AESD_CHAR_DEVICE
     g_run = 0;
     pthread_cancel(g_ts_tid);
     pthread_join(g_ts_tid, NULL);
+#endif
 
     struct conn_node *it = SLIST_FIRST(&g_conns);
     while (it) 
@@ -485,7 +537,9 @@ int main(int argc, char *argv[])
         it = next;
     }
 
+#if !USE_AESD_CHAR_DEVICE
     unlink(DATAFILE);
+#endif
     pthread_mutex_destroy(&g_file_mtx);
     syslog(LOG_INFO, "aesdsocket exiting");
     closelog();
