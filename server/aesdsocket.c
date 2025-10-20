@@ -98,25 +98,40 @@ static char *read_file_locked(size_t *out_len)
    
     size_t cap = 0, len = 0;
 
-    for (;;) {
+    for (;;) 
+    {
         char tmp[4096];
         ssize_t n = read(fd, tmp, sizeof tmp);
-        if (n > 0) {
-            if (len + (size_t)n > cap) {
+        if (n > 0) 
+        {
+            if (len + (size_t)n > cap) 
+            {
                 size_t newcap = cap ? cap * 2 : 4096;
                 while (newcap < len + (size_t)n) newcap *= 2;
                 char *nb = realloc(buf, newcap);
-                if (!nb) { free(buf); close(fd); return NULL; }
+                if (!nb) 
+                { 
+                	free(buf); close(fd); return NULL; 
+                }
                 buf = nb; cap = newcap;
             }
             memcpy(buf + len, tmp, (size_t)n);
             len += (size_t)n;
-        } else if (n == 0) {
-            break;                  // EOF for the device on this read
-        } else if (errno == EINTR) {
-            continue;               // interrupted, retry
-        } else {
-            free(buf); close(fd); return NULL;   // real error
+        } 
+        
+        else if (n == 0) 
+        {
+            break;                  
+        } 
+        else if (errno == EINTR) 
+        {
+            continue;               
+        } 
+        else 
+        {
+            free(buf); 
+            close(fd); 
+            return NULL;   
         }
     }
 
