@@ -1,6 +1,6 @@
 #!/bin/sh
 
-DAEMON=aesdsocket
+DAEMON=/usr/bin/aesdsocket
 DAEMON_NAME=aesdsocket
 DAEMON_OPTS="-d"   # run in daemon mode
 
