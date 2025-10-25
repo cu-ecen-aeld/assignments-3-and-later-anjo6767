@@ -17,6 +17,8 @@
 #include <sys/queue.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #ifndef USE_AESD_CHAR_DEVICE
 #define USE_AESD_CHAR_DEVICE 1
@@ -60,41 +62,6 @@ static char *read_file_locked(size_t *out_len)
         return NULL;
     }
 
-    /*struct stat st;
-    if (fstat(fd, &st) == -1) 
-    {
-        close(fd);
-        return NULL;
-    }
-
-    if (st.st_size == 0) 
-    {
-        close(fd);
-        return NULL;
-    }
-
-    buf = malloc(st.st_size);
-    if (!buf) 
-    {
-        close(fd);
-        return NULL;
-    }
-
-    size_t offset = 0;
-    while (offset < (size_t)st.st_size) 
-    {
-        ssize_t n = read(fd, buf + offset, (size_t)st.st_size - offset);
-        if (n <= 0) 
-        {
-            free(buf);
-            close(fd);
-            return NULL;
-        }
-        offset += (size_t)n;
-    }
-    close(fd);
-    *out_len = (size_t)st.st_size;
-    return buf;*/
    
     size_t cap = 0, len = 0;
 
@@ -141,6 +108,169 @@ static char *read_file_locked(size_t *out_len)
 }
 
 
+/* Returns:
+
+ *   1  -> handled special AESDCHAR_IOCSEEKTO:X,Y (already read and sent to client)
+
+ *   0  -> not a special command (treat as normal payload)
+
+ *  -1  -> parse/ioctl error (fall back to normal handling)
+
+ */
+
+static int handle_seekto_line(const char *line, size_t len, int connfd)
+
+{
+
+    static const char prefix[] = "AESDCHAR_IOCSEEKTO:";
+
+    const size_t pfxlen = sizeof(prefix) - 1;
+
+
+
+    if (len < pfxlen) 
+    {
+    	return 0;
+    }
+
+    if (strncmp(line, prefix, pfxlen) != 0) 
+    {
+    	return 0;
+    }
+
+
+
+    char tmp[128];
+
+    size_t paylen = len - pfxlen;
+
+    if (paylen >= sizeof(tmp))
+    {
+    	return -1;
+    }
+
+    memcpy(tmp, line + pfxlen, paylen);
+
+    if (paylen && tmp[paylen - 1] == '\n') paylen--;
+
+    tmp[paylen] = '\0';
+
+
+
+    char *end = NULL;
+
+    errno = 0;
+
+    unsigned long x = strtoul(tmp, &end, 10);
+
+    if (errno || end == tmp || *end != ',') 
+    {
+    	return -1;
+    }
+
+
+
+    const char *ystr = end + 1;
+
+    errno = 0;
+
+    unsigned long y = strtoul(ystr, &end, 10);
+
+    if (errno || end == ystr || *end != '\0') 
+    {
+    	return -1;
+    }
+
+
+
+    int ret = -1;
+
+
+
+    pthread_mutex_lock(&g_file_mtx);
+
+
+
+    int fd = open(DATAFILE, O_RDWR);
+
+    if (fd >= 0) {
+
+        struct aesd_seekto st;
+
+        st.write_cmd = (uint32_t)x;
+
+        st.write_cmd_offset = (uint32_t)y;
+
+
+
+        if (ioctl(fd, AESDCHAR_IOCSEEKTO, &st) == 0) 
+        {
+
+            char buf[4096];
+
+            for (;;) 
+            {
+
+                ssize_t n = read(fd, buf, sizeof buf);
+
+                if (n > 0) 
+                {
+
+                    size_t off = 0;
+
+                    while (off < (size_t)n) 
+                    {
+
+                        ssize_t s = send(connfd, buf + off, (size_t)n - off, MSG_NOSIGNAL);
+
+                        if (s <= 0) 
+                        { 	
+                        	close(fd); pthread_mutex_unlock(&g_file_mtx);
+                        	return -1; 
+                        }
+                        
+
+                        off += (size_t)s;
+
+                    }
+
+                } 
+                else if (n == 0) 
+                {
+
+                    break;
+
+                } 
+                else if (errno != EINTR) 
+                {
+
+                    close(fd);
+
+                    pthread_mutex_unlock(&g_file_mtx);
+
+                    return -1;
+
+                }
+
+            }
+
+            ret = 1;
+
+        }
+
+        close(fd);
+
+    }
+
+
+
+    pthread_mutex_unlock(&g_file_mtx);
+
+    return ret;
+
+}
+
+
 static void *conn_thread(void *arg)
 {
     struct conn_node *node = (struct conn_node *)arg;
@@ -177,11 +307,14 @@ static void *conn_thread(void *arg)
             char *filedata = read_file_locked(&flen);
             pthread_mutex_unlock(&g_file_mtx);
 
-            if (filedata && flen > 0) {
+            if (filedata && flen > 0) 
+            {
                 size_t offset = 0;
-                while (offset < flen) {
+                while (offset < flen) 
+                {
                     ssize_t s = send(connfd, filedata + offset, flen - offset, MSG_NOSIGNAL);
-                    if (s <= 0) {
+                    if (s <= 0) 
+                    {
                         break;
                     }
                     offset += (size_t)s;
@@ -215,15 +348,20 @@ static void *conn_thread(void *arg)
             if (packet[i] == '\n') 
 	    {
                 size_t chunk_len = (i + 1) - start;
+                
+                int special = handle_seekto_line(packet + start, chunk_len, connfd);
+          
+                if (special <= 0) 
+                {
+                    pthread_mutex_lock(&g_file_mtx);
 
-                pthread_mutex_lock(&g_file_mtx);
-                //int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
                 #if USE_AESD_CHAR_DEVICE
 		int fdw = open(DATAFILE, O_WRONLY);
 		#else
 		int fdw = open(DATAFILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
 		#endif
-                if (fdw >= 0) 
+
+               if (fdw >= 0) 
 		{
                     (void)write(fdw, packet + start, chunk_len);
                     (void)fsync(fdw);
@@ -249,6 +387,7 @@ static void *conn_thread(void *arg)
                     }
                 }
                 free(filedata);
+                }
 
                 start = i + 1;
             }
